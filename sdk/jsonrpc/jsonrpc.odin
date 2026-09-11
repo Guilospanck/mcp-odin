@@ -27,3 +27,21 @@ request_to_response_id :: proc(rid: Request_Id) -> Response_Id {
   return nil
 }
 
+request_id_to_json_value :: proc(rid: Request_Id) -> json.Value {
+
+  switch id in rid {
+  case ID:
+    switch i in id {
+    case string:
+      return json.String(i)
+    case i64:
+      return json.Integer(i)
+    }
+
+  case json.Null:
+    return nil
+  }
+
+  return nil
+}
+

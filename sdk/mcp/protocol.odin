@@ -553,3 +553,6 @@ Subscriptions_Listen_Request :: struct {
   meta:          Meta `json:"_meta,omitempty"`,
   notifications: Subscription_Filter `json:"notifications"`,
 }
+
+Subscriptions_Acknowledged_Notification_Params :: Subscriptions_Listen_Request
+

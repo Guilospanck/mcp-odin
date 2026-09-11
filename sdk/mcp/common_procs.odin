@@ -5,7 +5,6 @@ import "core:encoding/json"
 import "core:os"
 
 convert_schema_into_json_value :: proc(schema: any) -> ([]byte, json.Value, Error_Code) {
-
   schema_bytes, schema_marshal_err := json.marshal(schema)
   if schema_marshal_err != nil {
     return {}, {}, Error_Code.Invalid_Params

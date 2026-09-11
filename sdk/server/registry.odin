@@ -10,6 +10,10 @@ import "core:encoding/json"
 
 // Re-export so users can use
 Server_Info :: mcp.Server_Info
+Server_Capabilities :: mcp.Server_Capabilities
+Prompts_Capab :: mcp.Prompts_Capab
+Resources_Capab :: mcp.Resources_Capab
+Tools_Capab :: mcp.Tools_Capab
 
 Tools_Call_Response :: mcp.Tools_Call_Response
 Input_Schema_With_Properties :: mcp.Input_Schema_With_Properties
@@ -66,7 +70,6 @@ Resources :: map[mcp.URI]Resource_Entry
 
 Resources_Templates :: map[mcp.URI]mcp.Resource_Template
 
-
 /**** PROMPTS ****/
 Prompt_Name :: string
 
@@ -98,7 +101,8 @@ Subscription :: struct {
   sink: Notification_Sink,
 }
 
-Subscriptions :: [dynamic]Subscription_Id
+Subscriptions :: map[Subscription_Id]Subscription
+TRP_Subscriptions :: [dynamic]Subscription_Id
 Resource_Subscriptions :: map[mcp.URI]Subscription_Id
 
 /**** SERVER ****/
@@ -111,9 +115,16 @@ Server :: struct {
   prompts:                              Prompts,
 
   // Subscriptions
-  resources_list_changed_subscriptions: Subscriptions,
-  tools_list_changed_subscriptions:     Subscriptions,
-  prompts_list_changed_subscriptions:   Subscriptions,
+  subscriptions:                        Subscriptions,
+  resources_list_changed_subscriptions: TRP_Subscriptions,
+  tools_list_changed_subscriptions:     TRP_Subscriptions,
+  prompts_list_changed_subscriptions:   TRP_Subscriptions,
   resources_subscriptions:              Resource_Subscriptions,
+}
+
+JSONRPC_Notification :: struct {
+  jsonrpc: string `json:"jsonrpc"`, // always "2.0"
+  method:  string `json:"method"`, // e.g. "notifications/subscriptions/acknowledged"
+  params:  json.Value `json:"params"`,
 }
 

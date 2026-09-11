@@ -8,10 +8,15 @@ import "core:fmt"
 
 main :: proc() {
   server := mcp_sdk.create_server(
-    mcp_sdk.Server_Info {
+    info = mcp_sdk.Server_Info {
       name = "hello-odin-mcp-server",
       title = "Hello MCP Server",
       version = "1.0.0",
+    },
+    server_caps = mcp_sdk.Server_Capabilities {
+      prompts = mcp_sdk.Prompts_Capab{list_changed = true},
+      resources = mcp_sdk.Resources_Capab{list_changed = true, subscribe = true},
+      tools = mcp_sdk.Tools_Capab{list_changed = true},
     },
   )
 

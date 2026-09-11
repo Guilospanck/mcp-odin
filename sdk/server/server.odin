@@ -11,19 +11,31 @@ Server_Transport :: enum {
   stdio,
 }
 
-create_server :: proc(info: Server_Info, allocator := context.allocator) -> Server {
+create_server :: proc(
+  info: Server_Info,
+  server_caps: mcp.Server_Capabilities,
+  allocator := context.allocator,
+) -> Server {
   return Server {
-    info = info,
-    capabilities = mcp.Server_Capabilities{},
-    tools = make(Tools, allocator),
-    resources = make(Resources, allocator),
-    prompts = make(Prompts, allocator),
-    resources_templates = make(Resources_Templates, allocator),
-    resources_list_changed_subscriptions = make(Subscriptions, allocator),
-    tools_list_changed_subscriptions = make(Subscriptions, allocator),
-    prompts_list_changed_subscriptions = make(Subscriptions, allocator),
-    resources_subscriptions = make(Resource_Subscriptions, allocator),
+    info                                 = info,
+    capabilities                         = server_caps,
+    tools                                = make(Tools, allocator),
+    resources                            = make(Resources, allocator),
+    prompts                              = make(Prompts, allocator),
+
+    // subscriptions
+    subscriptions                        = make(Subscriptions, allocator),
+    resources_templates                  = make(Resources_Templates, allocator),
+    resources_list_changed_subscriptions = make(TRP_Subscriptions, allocator),
+    tools_list_changed_subscriptions     = make(TRP_Subscriptions, allocator),
+    prompts_list_changed_subscriptions   = make(TRP_Subscriptions, allocator),
+    resources_subscriptions              = make(Resource_Subscriptions, allocator),
   }
+}
+
+// TODO:
+destroy_server :: proc(s: ^Server) {
+  unimplemented()
 }
 
 run :: proc(server: ^Server, srv_transport: Server_Transport, allocator := context.allocator) {
@@ -70,9 +82,11 @@ run_with_transport :: proc(
     res := dispatch(server, req)
     if res == nil do continue
 
+
     res_bytes, marshal_err := json.marshal(res)
     if marshal_err != nil {
-      fmt.eprintfln("\n\nerror marshalling res: %+v", marshal_err)
+      fmt.eprintfln("\nRESPONSE:\n%+v", res)
+      fmt.eprintfln("\nerror marshalling res: %+v", marshal_err)
       continue
     }
 

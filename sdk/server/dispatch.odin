@@ -20,7 +20,7 @@ import "core:slice"
 */
 
 // Called by the I/O loop at server.odin
-dispatch :: proc(s: ^Server, req: jsonrpc.JSONRPC_Request) -> Maybe(jsonrpc.JSONRPC_Response) {
+dispatch :: proc(s: ^Server, req: jsonrpc.JSONRPC_Request) -> Maybe(Response) {
   method, known := mcp.method_from_name(req.method)
 
   // We can only process methods that we know
@@ -45,7 +45,7 @@ dispatch :: proc(s: ^Server, req: jsonrpc.JSONRPC_Request) -> Maybe(jsonrpc.JSON
   // then we return
   // missing required client capability for that method → -32021
 
-  // Every request MUST have an ID. If not, we will handle it as a notification
+  // Every request MUST have an ID. If not, we will handle it as a notification.
   if req.id == nil {
     return handle_notification(method, req, s)
   }
@@ -138,11 +138,16 @@ validate_meta :: proc(req: jsonrpc.JSONRPC_Request) -> mcp.Error_Code {
   return nil
 }
 
+Response :: union {
+  jsonrpc.JSONRPC_Response,
+  JSONRPC_Notification,
+}
+
 handle_request :: proc(
   method: mcp.Method,
   req: jsonrpc.JSONRPC_Request,
   s: ^Server,
-) -> Maybe(jsonrpc.JSONRPC_Response) {
+) -> Maybe(Response) {
 
   // TODO: remove #partial once we have all methods implemented
   #partial switch method {
@@ -171,10 +176,20 @@ handle_request :: proc(
     return handle_req_response(req.id, prompt_read(s, req))
 
   case mcp.Method.Subscriptions_Listen:
-    subscriptions_listen(s, req)
-    // TODO: return this MUST be different from the other
-    // handle_req_response because we don't send an `id`
-    return nil
+    notification_method, notification_params, err := subscriptions_listen(s, req)
+
+    if err != nil {
+      response_error := jsonrpc.Response_Error {
+        code    = mcp.error_code_number(err),
+        message = mcp.error_code_message(err),
+      }
+      return jsonrpc.create_error_response(
+        error = response_error,
+        id = jsonrpc.request_to_response_id(req.id),
+      )
+    }
+
+    return build_notification(method = notification_method, params = notification_params)
 
   case:
     fmt.eprintfln("known method not implemented yet: %+v", method)
@@ -193,7 +208,7 @@ handle_notification :: proc(
   method: mcp.Method,
   req: jsonrpc.JSONRPC_Request,
   s: ^Server,
-) -> Maybe(jsonrpc.JSONRPC_Response) {
+) -> Maybe(Response) {
   #partial switch method {
   case mcp.Method.Notifications_Progress:
     fmt.eprintln("Need to implement 'notifications/progress'")
@@ -466,7 +481,7 @@ resource_read :: proc(
 }
 
 // TODO:
-// Whenever this changes, check the list of subscriptions and then update the person
+// NOTIFICATION: Whenever this changes, check the list of subscriptions and then update the person
 // do the same for resources and prompts
 add_prompt :: proc(
   s: ^Server,
@@ -577,14 +592,19 @@ prompt_read :: proc(
     nil
 }
 
+// TODO: NOTIFICATION: need to add the subscription to server
 @(private = "file")
 decide_which_subscription_listen_to_accept :: proc(
   s: ^Server,
   subscription_id: Subscription_Id,
   filters: mcp.Subscription_Filter,
-) -> mcp.Error_Code {
+) -> (
+  mcp.Subscription_Filter,
+  mcp.Error_Code,
+) {
 
   server_allows_any_subscription := false
+  notification_filters := mcp.Subscription_Filter{}
 
   // tools list changed caps
   if v, ok := filters.tools_list_changed.?; ok && v {
@@ -593,6 +613,8 @@ decide_which_subscription_listen_to_accept :: proc(
     if has_tools_capab && (tools_capab.list_changed.? or_else false) {
       server_allows_any_subscription = true
       append(&s.tools_list_changed_subscriptions, subscription_id)
+
+      notification_filters.tools_list_changed = true
     }
   }
 
@@ -603,6 +625,8 @@ decide_which_subscription_listen_to_accept :: proc(
     if has_prompts_capab && (prompts_capab.list_changed.? or_else false) {
       server_allows_any_subscription = true
       append(&s.prompts_list_changed_subscriptions, subscription_id)
+
+      notification_filters.prompts_list_changed = true
     }
   }
 
@@ -613,6 +637,8 @@ decide_which_subscription_listen_to_accept :: proc(
     if has_resources_capab && (resources_capab.list_changed.? or_else false) {
       server_allows_any_subscription = true
       append(&s.resources_list_changed_subscriptions, subscription_id)
+
+      notification_filters.resources_list_changed = true
     }
   }
 
@@ -620,31 +646,38 @@ decide_which_subscription_listen_to_accept :: proc(
   if v, ok := filters.resource_subscriptions.?; ok && len(v) > 0 {
     if has_resources_capab && (resources_capab.subscribe.? or_else false) {
       server_allows_any_subscription = true
+      subs := make([]string, len(v), context.allocator)
+
+      i := 0
       for uri in v {
         s.resources_subscriptions[uri] = subscription_id
+        subs[i] = uri
+        i += 1
       }
+
+      notification_filters.resource_subscriptions = subs
     }
   }
 
-  if !server_allows_any_subscription do return mcp.Error_Code.Method_Not_Found
+  if !server_allows_any_subscription do return {}, mcp.Error_Code.Method_Not_Found
 
-  return nil
+  return notification_filters, nil
 }
 
-// TODO:
 subscriptions_listen :: proc(
   s: ^Server,
   req: jsonrpc.JSONRPC_Request,
 ) -> (
-  mcp.Prompts_List_Response,
-  mcp.Error_Code,
+  notification_method: mcp.Method,
+  notification_params: mcp.Subscriptions_Acknowledged_Notification_Params,
+  notification_error: mcp.Error_Code,
 ) {
   params, params_error := mcp.decode_into_type(
     jsonrpc_request_params_to_json_value(req.params),
     mcp.Subscriptions_Listen_Request,
   )
   if params_error != nil {
-    return {}, params_error
+    return {}, {}, params_error
   }
 
   subscription_id := req.id
@@ -652,13 +685,24 @@ subscriptions_listen :: proc(
 
   // Decide which - if any - subscriptions this server is able
   // to acknowledge
-  err_capabilities := decide_which_subscription_listen_to_accept(s, subscription_id, filters)
-  if err_capabilities != nil do return {}, err_capabilities
+  notification_filters, err_capabilities := decide_which_subscription_listen_to_accept(
+    s,
+    subscription_id,
+    filters,
+  )
+  if err_capabilities != nil do return {}, {}, err_capabilities
+
+  meta := make(mcp.Meta, context.allocator)
+  meta[mcp.meta_field_name(mcp.Meta_Field.Subscription_Id)] = jsonrpc.request_id_to_json_value(
+    subscription_id,
+  )
+  subs_notif_params := mcp.Subscriptions_Acknowledged_Notification_Params {
+    meta          = meta,
+    notifications = notification_filters,
+  }
 
   // send acknowledgement of the filters that we're gonna accept
-
-  return {}, nil
-
+  return mcp.Method.Notifications_Subscriptions_Acknowledged, subs_notif_params, nil
 }
 
 
@@ -769,5 +813,15 @@ handle_req_response :: proc(
   }
 
   return jsonrpc.create_result_response(data = data, id = jsonrpc.request_to_response_id(req_id))
+}
+
+build_notification :: proc(method: mcp.Method, params: $P) -> JSONRPC_Notification {
+  _, pv, _ := mcp.convert_schema_into_json_value(params)
+
+  return JSONRPC_Notification {
+    jsonrpc = jsonrpc.JSONRPC_VERSION,
+    method = mcp.method_name(method),
+    params = pv,
+  }
 }
 
