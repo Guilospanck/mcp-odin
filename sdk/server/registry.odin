@@ -7,6 +7,8 @@ package server
 import jsonrpc "../jsonrpc"
 import mcp "../mcp"
 import "core:encoding/json"
+import "core:mem"
+import "core:mem/virtual"
 
 // Re-export so users can use
 Server_Info :: mcp.Server_Info
@@ -120,6 +122,10 @@ Server :: struct {
   tools_list_changed_subscriptions:     TRP_Subscriptions,
   prompts_list_changed_subscriptions:   TRP_Subscriptions,
   resources_subscriptions:              Resource_Subscriptions,
+
+  // arena
+  registry_arena:                       virtual.Arena,
+  allocator:                            mem.Allocator,
 }
 
 JSONRPC_Notification :: struct {

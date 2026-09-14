@@ -5,6 +5,7 @@ import mcp "../mcp"
 import transport_layer "../transport"
 import "core:encoding/json"
 import "core:fmt"
+import "core:mem"
 import "core:mem/virtual"
 
 Server_Transport :: enum {
@@ -15,27 +16,40 @@ create_server :: proc(
   info: Server_Info,
   server_caps: mcp.Server_Capabilities,
   allocator := context.allocator,
-) -> Server {
-  return Server {
-    info                                 = info,
-    capabilities                         = server_caps,
-    tools                                = make(Tools, allocator),
-    resources                            = make(Resources, allocator),
-    prompts                              = make(Prompts, allocator),
+) -> ^Server {
+  s := new(Server, allocator)
+  s.info = info
+  s.capabilities = server_caps
+  s.allocator = allocator
 
-    // subscriptions
-    subscriptions                        = make(Subscriptions, allocator),
-    resources_templates                  = make(Resources_Templates, allocator),
-    resources_list_changed_subscriptions = make(TRP_Subscriptions, allocator),
-    tools_list_changed_subscriptions     = make(TRP_Subscriptions, allocator),
-    prompts_list_changed_subscriptions   = make(TRP_Subscriptions, allocator),
-    resources_subscriptions              = make(Resource_Subscriptions, allocator),
+  if err := virtual.arena_init_growing(&s.registry_arena); err != nil {
+    panic("could not instantiate arena")
   }
+
+  a_alloc := virtual.arena_allocator(&s.registry_arena)
+
+  s.tools = make(Tools, a_alloc)
+  s.resources = make(Resources, a_alloc)
+  s.prompts = make(Prompts, a_alloc)
+
+  // subscriptions
+  s.subscriptions = make(Subscriptions, a_alloc)
+  s.resources_templates = make(Resources_Templates, a_alloc)
+  s.resources_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
+  s.tools_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
+  s.prompts_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
+  s.resources_subscriptions = make(Resource_Subscriptions, a_alloc)
+
+  return s
 }
 
-// TODO:
+registry_allocator :: proc(s: ^Server) -> mem.Allocator {
+  return virtual.arena_allocator(&s.registry_arena)
+}
+
 destroy_server :: proc(s: ^Server) {
-  unimplemented()
+  virtual.arena_destroy(&s.registry_arena)
+  free(s, s.allocator)
 }
 
 run :: proc(server: ^Server, srv_transport: Server_Transport, allocator := context.allocator) {
@@ -84,8 +98,14 @@ run_with_transport :: proc(
 
 
     res_bytes, marshal_err := json.marshal(res)
+    should_print_full_res := len(res_bytes) < 2048
+
     if marshal_err != nil {
-      fmt.eprintfln("\nRESPONSE:\n%+v", res)
+      if should_print_full_res {
+        fmt.eprintfln("\nRESPONSE:\n%+v", res)
+      } else {
+        fmt.eprintfln("\nRESPONSE (size): %d bytes", len(res_bytes))
+      }
       fmt.eprintfln("\nerror marshalling res: %+v", marshal_err)
       continue
     }
@@ -97,7 +117,11 @@ run_with_transport :: proc(
     }
 
     fmt.eprintln("[OK] Sent response:\n")
-    fmt.eprintfln("%+v", res)
+    if should_print_full_res {
+      fmt.eprintfln("%+v", res)
+    } else {
+      fmt.eprintfln("\nSize: %d bytes", len(res_bytes))
+    }
   }
 }
 
