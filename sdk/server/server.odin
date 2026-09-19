@@ -143,9 +143,20 @@ run_with_transport :: proc(
 
     fmt.eprintfln("CLIENT REQ:\n%+v", req)
 
-    res := dispatch(server, req)
-    if res == nil do continue
+    sink := Sink {
+      data = transport,
+      write = proc(data: rawptr, bytes: []u8) {
+        t := (^transport_layer.Transport)(data)
+        transport_err := t.write(t, bytes)
+        fmt.eprintfln("SINKED %s", string(bytes))
+        if transport_err != nil {
+          fmt.eprintfln("\n\ncould not write to transport: %+v", transport_err)
+        }
+      },
+    }
 
+    res := dispatch(server, req, sink)
+    if res == nil do continue
 
     res_bytes, marshal_err := json.marshal(res)
     should_print_full_res := len(res_bytes) < 2048

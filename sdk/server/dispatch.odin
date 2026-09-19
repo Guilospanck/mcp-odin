@@ -21,7 +21,7 @@ import "core:strings"
 */
 
 // Called by the I/O loop at server.odin
-dispatch :: proc(s: ^Server, req: jsonrpc.JSONRPC_Request) -> Maybe(Response) {
+dispatch :: proc(s: ^Server, req: jsonrpc.JSONRPC_Request, sink: Sink) -> Maybe(Response) {
   method, known := mcp.method_from_name(req.method)
 
   // We can only process methods that we know
@@ -51,7 +51,7 @@ dispatch :: proc(s: ^Server, req: jsonrpc.JSONRPC_Request) -> Maybe(Response) {
     return handle_notification(method, req, s)
   }
 
-  return handle_request(method, req, s)
+  return handle_request(method, req, s, sink)
 }
 
 validate_meta :: proc(req: jsonrpc.JSONRPC_Request) -> mcp.Error_Code {
@@ -148,6 +148,7 @@ handle_request :: proc(
   method: mcp.Method,
   req: jsonrpc.JSONRPC_Request,
   s: ^Server,
+  sink: Sink,
 ) -> Maybe(Response) {
 
   // TODO: remove #partial once we have all methods implemented
@@ -177,7 +178,7 @@ handle_request :: proc(
     return handle_req_response(req.id, prompt_read(s, req))
 
   case mcp.Method.Subscriptions_Listen:
-    notification_method, notification_params, err := subscriptions_listen(s, req)
+    notification_method, notification_params, err := subscriptions_listen(s, req, sink)
 
     if err != nil {
       response_error := jsonrpc.Response_Error {
@@ -535,7 +536,7 @@ maybe_send_notification :: proc(s: ^Server, subs_type: Subscription_Type, identi
     if subs_id, ok := s.resources_subscriptions[identifier]; ok {
       if subscription, ok := s.subscriptions[subs_id]; ok {
         // TODO:  send actual notification
-        subscription.sink(transmute([]u8)identifier)
+        subscription.sink.write(subscription.sink.data, transmute([]u8)identifier)
       }
     }
 
@@ -548,7 +549,7 @@ maybe_send_notification :: proc(s: ^Server, subs_type: Subscription_Type, identi
     for subs_id in s.tools_list_changed_subscriptions {
       if subscription, ok := s.subscriptions[subs_id]; ok {
         // TODO:  send actual notification
-        subscription.sink(transmute([]u8)identifier)
+        subscription.sink.write(subscription.sink.data, transmute([]u8)identifier)
       }
     }
 
@@ -747,6 +748,7 @@ decide_which_subscription_listen_to_accept :: proc(
 subscriptions_listen :: proc(
   s: ^Server,
   req: jsonrpc.JSONRPC_Request,
+  sink: Sink,
 ) -> (
   notification_method: mcp.Method,
   notification_params: mcp.Subscriptions_Acknowledged_Notification_Params,
@@ -767,15 +769,7 @@ subscriptions_listen :: proc(
   // to acknowledge
   notification_filters, err_capabilities := decide_which_subscription_listen_to_accept(
     s,
-    Subscription {
-      id = subscription_id,
-      ack = false,
-      // TODO: get this
-      sink = proc(data: []u8) -> mcp.Error_Code {
-        fmt.eprintfln("Trying to sink %s\n\n", string(data))
-        return nil
-      },
-    },
+    Subscription{id = subscription_id, ack = false, sink = sink},
     filters,
   )
   if err_capabilities != nil do return {}, {}, err_capabilities

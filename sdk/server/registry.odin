@@ -91,7 +91,10 @@ Prompt_Entry :: struct {
 Prompts :: map[Prompt_Name]Prompt_Entry
 
 /**** SUBSCRIPTIONS ****/
-Notification_Sink :: #type proc(data: []byte) -> mcp.Error_Code
+Sink :: struct {
+  data:  rawptr,
+  write: proc(data: rawptr, bytes: []u8),
+}
 
 Subscription_Id :: jsonrpc.Request_Id
 
@@ -100,7 +103,7 @@ Subscription :: struct {
   // whether this subscription has already been acknowledged
   ack:  bool,
   // where to write the notification for this subscription
-  sink: Notification_Sink,
+  sink: Sink,
 }
 
 Subscriptions :: map[Subscription_Id]Subscription
