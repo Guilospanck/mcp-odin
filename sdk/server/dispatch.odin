@@ -6,6 +6,7 @@ import "base:intrinsics"
 import "core:encoding/json"
 import "core:fmt"
 import "core:slice"
+import "core:strings"
 
 /*
   Decision layer for the MCP server. It's a request-idn, response-out.
@@ -188,6 +189,7 @@ handle_request :: proc(
         id = jsonrpc.request_to_response_id(req.id),
       )
     }
+    // TODO: we have to update the ack of subscriptions
 
     return build_notification(method = notification_method, params = notification_params)
 
@@ -347,6 +349,8 @@ add_tool :: proc(
   }
 
   fmt.eprintfln("Saved %q tool", info.name)
+
+  maybe_send_notification(s, Subscription_Type.Tool, info.name)
   return nil
 }
 
@@ -390,6 +394,35 @@ add_resource :: proc(
   }
 
   fmt.eprintfln("Saved %q resource", info.uri)
+
+  maybe_send_notification(s, Subscription_Type.Resources, info.uri)
+
+  return nil
+}
+
+update_resource :: proc(
+  s: ^Server,
+  info: mcp.Resource,
+  handler: Resource_Handler,
+) -> Maybe(jsonrpc.Response_Error) {
+  _, resource_already_exists := s.resources[info.uri]
+  if !resource_already_exists {
+    return jsonrpc.Response_Error {
+      code = i64(mcp.Error_Code.Invalid_Request),
+      message = mcp.error_code_message(Error_Code.Invalid_Params),
+      data = "Resource does not exist",
+    }
+  }
+
+  s.resources[info.uri] = Resource_Entry {
+    info    = info,
+    handler = handler,
+  }
+
+  fmt.eprintfln("Updated %q resource", info.uri)
+
+  maybe_send_notification(s, Subscription_Type.Resource, info.uri)
+
   return nil
 }
 
@@ -480,9 +513,50 @@ resource_read :: proc(
     }, nil
 }
 
-// TODO:
-// NOTIFICATION: Whenever this changes, check the list of subscriptions and then update the person
-// do the same for resources and prompts
+Subscription_Type :: enum {
+  Prompt,
+  Resources,
+  Resource,
+  Tool,
+}
+
+@(private = "file")
+maybe_send_notification :: proc(s: ^Server, subs_type: Subscription_Type, identifier: string) {
+  // TODO: should not send notification
+  // if subscription hasn;t been acknowledged yet
+  switch subs_type {
+  case .Prompt:
+  case .Resources:
+  case .Resource:
+    resources_capab, has_resources_capab := s.capabilities.resources.(mcp.Resources_Capab)
+    should_notify := has_resources_capab && (resources_capab.subscribe.? or_else false)
+    if !should_notify do return
+
+    if subs_id, ok := s.resources_subscriptions[identifier]; ok {
+      if subscription, ok := s.subscriptions[subs_id]; ok {
+        // TODO:  send actual notification
+        subscription.sink(transmute([]u8)identifier)
+      }
+    }
+
+
+  case .Tool:
+    tools_capab, has_tools_capab := s.capabilities.tools.(mcp.Tools_Capab)
+    should_notify := has_tools_capab && (tools_capab.list_changed.? or_else false)
+    if !should_notify do return
+
+    for subs_id in s.tools_list_changed_subscriptions {
+      if subscription, ok := s.subscriptions[subs_id]; ok {
+        // TODO:  send actual notification
+        subscription.sink(transmute([]u8)identifier)
+      }
+    }
+
+  case:
+    fmt.eprintfln("Subscription type %v not implemented on check", subs_type)
+  }
+}
+
 add_prompt :: proc(
   s: ^Server,
   prompt: mcp.Prompt,
@@ -503,6 +577,9 @@ add_prompt :: proc(
   }
 
   fmt.eprintfln("Saved %q prompt", prompt.name)
+
+  maybe_send_notification(s, Subscription_Type.Prompt, prompt.name)
+
   return nil
 }
 
@@ -592,16 +669,16 @@ prompt_read :: proc(
     nil
 }
 
-// TODO: NOTIFICATION: need to add the subscription to server
 @(private = "file")
 decide_which_subscription_listen_to_accept :: proc(
   s: ^Server,
-  subscription_id: Subscription_Id,
+  subscription: Subscription,
   filters: mcp.Subscription_Filter,
 ) -> (
   mcp.Subscription_Filter,
   mcp.Error_Code,
 ) {
+  subscription_id := subscription.id
 
   server_allows_any_subscription := false
   notification_filters := mcp.Subscription_Filter{}
@@ -650,8 +727,9 @@ decide_which_subscription_listen_to_accept :: proc(
 
       i := 0
       for uri in v {
-        s.resources_subscriptions[uri] = subscription_id
-        subs[i] = uri
+        key := strings.clone(uri, registry_allocator(s))
+        s.resources_subscriptions[key] = subscription_id
+        subs[i] = key
         i += 1
       }
 
@@ -660,6 +738,8 @@ decide_which_subscription_listen_to_accept :: proc(
   }
 
   if !server_allows_any_subscription do return {}, mcp.Error_Code.Method_Not_Found
+
+  s.subscriptions[subscription_id] = subscription
 
   return notification_filters, nil
 }
@@ -687,7 +767,15 @@ subscriptions_listen :: proc(
   // to acknowledge
   notification_filters, err_capabilities := decide_which_subscription_listen_to_accept(
     s,
-    subscription_id,
+    Subscription {
+      id = subscription_id,
+      ack = false,
+      // TODO: get this
+      sink = proc(data: []u8) -> mcp.Error_Code {
+        fmt.eprintfln("Trying to sink %s\n\n", string(data))
+        return nil
+      },
+    },
     filters,
   )
   if err_capabilities != nil do return {}, {}, err_capabilities

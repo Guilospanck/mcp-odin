@@ -31,10 +31,10 @@ create_server :: proc(
   s.tools = make(Tools, a_alloc)
   s.resources = make(Resources, a_alloc)
   s.prompts = make(Prompts, a_alloc)
+  s.resources_templates = make(Resources_Templates, a_alloc)
 
   // subscriptions
   s.subscriptions = make(Subscriptions, a_alloc)
-  s.resources_templates = make(Resources_Templates, a_alloc)
   s.resources_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
   s.tools_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
   s.prompts_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
@@ -78,9 +78,59 @@ run_with_transport :: proc(
 
   fmt.eprintln("Server running...")
 
+  i := 0
+
   for {
     defer virtual.arena_free_all(&arena)
     context.allocator = arena_allocator
+
+    // TODO: remove. this is only for testing
+    // subscriptions
+    i += 1
+    if i == 2 {
+      properties := json.Object{}
+
+      required := make([]string, 1)
+
+      input := Input_Schema_With_Properties {
+        type       = "object",
+        properties = properties,
+        required   = required,
+      }
+
+      add_tool(
+        s = server,
+        info = Tool{name = "potato_tool", input_schema = input},
+        handler = proc(
+          req: jsonrpc.JSONRPC_Request,
+          args: json.Value,
+        ) -> (
+          mcp.Tools_Call_Response,
+          mcp.Error_Code,
+        ) {
+          return {}, nil
+        },
+      )
+
+      resource := Resource {
+        uri         = "file://main.rs",
+        name        = "main.rs",
+        title       = "v2 updated resource",
+        description = "Primary application entry point",
+        mime_type   = "text/x-rust",
+      }
+
+      resource_handler := proc(
+        uri: URI,
+        allocator := context.allocator,
+      ) -> (
+        []Resources_Content,
+        Error_Code,
+      ) {
+        return nil, nil
+      }
+      update_resource(s = server, info = resource, handler = resource_handler)
+    }
 
     bytes, err := transport.read(transport)
     if err != nil do break
@@ -116,11 +166,11 @@ run_with_transport :: proc(
       continue
     }
 
-    fmt.eprintln("[OK] Sent response:\n")
+    fmt.eprintln("[OK] Sent response:")
     if should_print_full_res {
-      fmt.eprintfln("%+v", res)
+      fmt.eprintfln("%+v\n", res)
     } else {
-      fmt.eprintfln("\nSize: %d bytes", len(res_bytes))
+      fmt.eprintfln("Size: %d bytes\n", len(res_bytes))
     }
   }
 }

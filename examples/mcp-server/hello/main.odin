@@ -40,13 +40,26 @@ main :: proc() {
     }
 
     // resources
+    resource_info := resources.get_hello_resource()
     hello_resource_err := mcp_sdk.add_resource(
       s = server,
-      info = resources.get_hello_resource(),
+      info = resource_info,
       handler = resources.hello_resource_handler,
     )
     if hello_resource_err != nil {
       fmt.eprintfln("%+v", hello_resource_err)
+      return
+    }
+    // update resource
+    new_resource_info := resource_info
+    new_resource_info.title = "new_title_hello_resource"
+    hello_resource_updated_err := mcp_sdk.update_resource(
+      s = server,
+      info = new_resource_info,
+      handler = resources.hello_resource_handler,
+    )
+    if hello_resource_updated_err != nil {
+      fmt.eprintfln("%+v", hello_resource_updated_err)
       return
     }
 
