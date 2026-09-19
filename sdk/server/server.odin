@@ -1,17 +1,55 @@
 package server
 
 import jsonrpc "../jsonrpc"
+import mcp "../mcp"
 import transport_layer "../transport"
 import "core:encoding/json"
 import "core:fmt"
+import "core:mem"
 import "core:mem/virtual"
 
 Server_Transport :: enum {
   stdio,
 }
 
-create_server :: proc(info: Server_Info, allocator := context.allocator) -> Server {
-  return Server{info = info, tools = make(map[string]Tool_Entry, allocator)}
+create_server :: proc(
+  info: Server_Info,
+  server_caps: mcp.Server_Capabilities,
+  allocator := context.allocator,
+) -> ^Server {
+  s := new(Server, allocator)
+  s.info = info
+  s.capabilities = server_caps
+  s.allocator = allocator
+
+  if err := virtual.arena_init_growing(&s.registry_arena); err != nil {
+    panic("could not instantiate arena")
+  }
+
+  a_alloc := virtual.arena_allocator(&s.registry_arena)
+
+  s.tools = make(Tools, a_alloc)
+  s.resources = make(Resources, a_alloc)
+  s.prompts = make(Prompts, a_alloc)
+  s.resources_templates = make(Resources_Templates, a_alloc)
+
+  // subscriptions
+  s.subscriptions = make(Subscriptions, a_alloc)
+  s.resources_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
+  s.tools_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
+  s.prompts_list_changed_subscriptions = make(TRP_Subscriptions, a_alloc)
+  s.resources_subscriptions = make(Resource_Subscriptions, a_alloc)
+
+  return s
+}
+
+registry_allocator :: proc(s: ^Server) -> mem.Allocator {
+  return virtual.arena_allocator(&s.registry_arena)
+}
+
+destroy_server :: proc(s: ^Server) {
+  virtual.arena_destroy(&s.registry_arena)
+  free(s, s.allocator)
 }
 
 run :: proc(server: ^Server, srv_transport: Server_Transport, allocator := context.allocator) {
@@ -40,9 +78,59 @@ run_with_transport :: proc(
 
   fmt.eprintln("Server running...")
 
+  i := 0
+
   for {
     defer virtual.arena_free_all(&arena)
     context.allocator = arena_allocator
+
+    // TODO: remove. this is only for testing
+    // subscriptions
+    i += 1
+    if i == 2 {
+      properties := json.Object{}
+
+      required := make([]string, 1)
+
+      input := Input_Schema_With_Properties {
+        type       = "object",
+        properties = properties,
+        required   = required,
+      }
+
+      add_tool(
+        s = server,
+        info = Tool{name = "potato_tool", input_schema = input},
+        handler = proc(
+          req: jsonrpc.JSONRPC_Request,
+          args: json.Value,
+        ) -> (
+          mcp.Tools_Call_Response,
+          mcp.Error_Code,
+        ) {
+          return {}, nil
+        },
+      )
+
+      resource := Resource {
+        uri         = "file://main.rs",
+        name        = "main.rs",
+        title       = "v2 updated resource",
+        description = "Primary application entry point",
+        mime_type   = "text/x-rust",
+      }
+
+      resource_handler := proc(
+        uri: URI,
+        allocator := context.allocator,
+      ) -> (
+        []Resources_Content,
+        Error_Code,
+      ) {
+        return nil, nil
+      }
+      update_resource(s = server, info = resource, handler = resource_handler)
+    }
 
     bytes, err := transport.read(transport)
     if err != nil do break
@@ -55,12 +143,31 @@ run_with_transport :: proc(
 
     fmt.eprintfln("CLIENT REQ:\n%+v", req)
 
-    res := dispatch(server, req)
+    sink := Sink {
+      data = transport,
+      write = proc(data: rawptr, bytes: []u8) {
+        t := (^transport_layer.Transport)(data)
+        transport_err := t.write(t, bytes)
+        fmt.eprintfln("SINKED %s", string(bytes))
+        if transport_err != nil {
+          fmt.eprintfln("\n\ncould not write to transport: %+v", transport_err)
+        }
+      },
+    }
+
+    res := dispatch(server, req, sink)
     if res == nil do continue
 
     res_bytes, marshal_err := json.marshal(res)
+    should_print_full_res := len(res_bytes) < 2048
+
     if marshal_err != nil {
-      fmt.eprintfln("\n\nerror marshalling res: %+v", marshal_err)
+      if should_print_full_res {
+        fmt.eprintfln("\nRESPONSE:\n%+v", res)
+      } else {
+        fmt.eprintfln("\nRESPONSE (size): %d bytes", len(res_bytes))
+      }
+      fmt.eprintfln("\nerror marshalling res: %+v", marshal_err)
       continue
     }
 
@@ -70,8 +177,12 @@ run_with_transport :: proc(
       continue
     }
 
-    fmt.eprintln("[OK] Sent response:\n")
-    fmt.eprintfln("%+v", res)
+    fmt.eprintln("[OK] Sent response:")
+    if should_print_full_res {
+      fmt.eprintfln("%+v\n", res)
+    } else {
+      fmt.eprintfln("Size: %d bytes\n", len(res_bytes))
+    }
   }
 }
 

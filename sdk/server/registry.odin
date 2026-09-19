@@ -7,9 +7,15 @@ package server
 import jsonrpc "../jsonrpc"
 import mcp "../mcp"
 import "core:encoding/json"
+import "core:mem"
+import "core:mem/virtual"
 
 // Re-export so users can use
 Server_Info :: mcp.Server_Info
+Server_Capabilities :: mcp.Server_Capabilities
+Prompts_Capab :: mcp.Prompts_Capab
+Resources_Capab :: mcp.Resources_Capab
+Tools_Capab :: mcp.Tools_Capab
 
 Tools_Call_Response :: mcp.Tools_Call_Response
 Input_Schema_With_Properties :: mcp.Input_Schema_With_Properties
@@ -66,7 +72,6 @@ Resources :: map[mcp.URI]Resource_Entry
 
 Resources_Templates :: map[mcp.URI]mcp.Resource_Template
 
-
 /**** PROMPTS ****/
 Prompt_Name :: string
 
@@ -85,13 +90,50 @@ Prompt_Entry :: struct {
 }
 Prompts :: map[Prompt_Name]Prompt_Entry
 
+/**** SUBSCRIPTIONS ****/
+Sink :: struct {
+  data:  rawptr,
+  write: proc(data: rawptr, bytes: []u8),
+}
+
+Subscription_Id :: jsonrpc.Request_Id
+
+Subscription :: struct {
+  id:   Subscription_Id,
+  // whether this subscription has already been acknowledged
+  ack:  bool,
+  // where to write the notification for this subscription
+  sink: Sink,
+}
+
+Subscriptions :: map[Subscription_Id]Subscription
+TRP_Subscriptions :: [dynamic]Subscription_Id
+Resource_Subscriptions :: map[mcp.URI]Subscription_Id
+
 /**** SERVER ****/
 Server :: struct {
-  info:                mcp.Server_Info,
-  capabilities:        mcp.Server_Capabilities,
-  tools:               Tools,
-  resources:           Resources,
-  resources_templates: Resources_Templates,
-  prompts:             Prompts,
+  info:                                 mcp.Server_Info,
+  capabilities:                         mcp.Server_Capabilities,
+  tools:                                Tools,
+  resources:                            Resources,
+  resources_templates:                  Resources_Templates,
+  prompts:                              Prompts,
+
+  // Subscriptions
+  subscriptions:                        Subscriptions,
+  resources_list_changed_subscriptions: TRP_Subscriptions,
+  tools_list_changed_subscriptions:     TRP_Subscriptions,
+  prompts_list_changed_subscriptions:   TRP_Subscriptions,
+  resources_subscriptions:              Resource_Subscriptions,
+
+  // arena
+  registry_arena:                       virtual.Arena,
+  allocator:                            mem.Allocator,
+}
+
+JSONRPC_Notification :: struct {
+  jsonrpc: string `json:"jsonrpc"`, // always "2.0"
+  method:  string `json:"method"`, // e.g. "notifications/subscriptions/acknowledged"
+  params:  json.Value `json:"params"`,
 }
 

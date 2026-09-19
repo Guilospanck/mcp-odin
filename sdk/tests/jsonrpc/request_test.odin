@@ -84,7 +84,7 @@ should_parse_even_when_missing_params :: proc(t: ^testing.T) {
 
   testing.expect_value(t, err, nil)
   testing.expect(t, req.params == nil)
-  testing.expect(t, req.id == "potato")
+  testing.expect(t, req.id == jsonrpc.ID("potato"))
   testing.expect(t, req.jsonrpc == "2.0")
   testing.expect(t, req.method == "ping")
 }

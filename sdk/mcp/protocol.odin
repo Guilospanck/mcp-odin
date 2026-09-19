@@ -541,3 +541,18 @@ Content_Block :: union {
   // | ResourceLink
   // | EmbeddedResource
 }
+
+Subscription_Filter :: struct {
+  tools_list_changed:     Maybe(bool) `json:"toolsListChanged,omitempty"`,
+  prompts_list_changed:   Maybe(bool) `json:"promptsListChanged,omitempty"`,
+  resources_list_changed: Maybe(bool) `json:"resourcesListChanged,omitempty"`,
+  resource_subscriptions: Maybe([]string) `json:"resourceSubscriptions,omitempty"`,
+}
+
+Subscriptions_Listen_Request :: struct {
+  meta:          Meta `json:"_meta,omitempty"`,
+  notifications: Subscription_Filter `json:"notifications"`,
+}
+
+Subscriptions_Acknowledged_Notification_Params :: Subscriptions_Listen_Request
+
